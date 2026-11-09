@@ -83,12 +83,64 @@ need the element classes from `qblox_applications`;
 build configs from a twin calibration when you have neither. Requires
 qblox-scheduler (tested with 1.0.1), which the rest of the twin never imports.
 
-## Running
+## Running on a live QFw
 
-```
-cd examples
-./qfw_ghz.sh qiskit 4 qblox-twin 1
-```
+Nothing here has run on a live QFw yet; every check so far stubbed the DEFw
+daemons. These are the steps for a first run.
+
+1. **Clone this fork with its submodules.** DEFw comes from
+   `delgadoandrea21/DEFw` (its `master` is the commit QFw pins); the QHW
+   packages come from openQSE, because `.gitmodules` on this branch points
+   them there (see the note at its top).
+
+   ```bash
+   git clone --recursive -b qblox-twin-qpm https://github.com/delgadoandrea21/QFw.git
+   ```
+
+   In the QFw-SLURM-Cluster container, do this in the QFw source tree
+   (`/workspace/qfw-container-base/QFw`) instead, with
+   `git submodule sync && git submodule update --init --recursive` after
+   checking out the branch.
+
+2. **Install and activate**, with QFw's standard Python environment
+   (Python 3.11 or later). The twin needs nothing beyond it: numpy is already a
+   QFw requirement.
+
+   ```bash
+   ./setup/qfw_install.sh --prefix <prefix> --with-defw
+   source <prefix>/bin/qfw-activate
+   ```
+
+3. **Run the GHZ example.** It starts only the `qblox-twin` service, reserves
+   it, runs and tears down. On a Slurm cluster, run it inside an allocation as
+   for the other examples. The `QFW_QBLOX_TWIN_*` settings are read from the
+   environment of the QPM process.
+
+   ```bash
+   export QFW_QBLOX_TWIN_SEED=11                     # optional
+   export QFW_QBLOX_TWIN_DEVICE=/path/device.json    # optional
+   cd "$QFW_SHARE_DIR/examples"
+   ./qfw_ghz.sh qiskit 3 qblox-twin 1
+   ```
+
+   With the example calibration, about 8% of the GHZ-3 shots land outside
+   000 and 111.
+
+4. **Long-running site QPM** (once step 3 works). `qblox-twin` is in the
+   packaged site manifest (ports 8790 and 8791). Start it on its host after
+   the directory service reports ready:
+
+   ```bash
+   qfw-qpm-svc start --scope site --run-dir /var/lib/qfw/qpm/qblox-twin \
+     --site-config "$QFW_SITE_CONFIG" --service-id qblox-twin
+   ```
+
+   Under systemd, put the `QFW_QBLOX_TWIN_*` settings in
+   `/etc/openqse/qfw/services/qpm/qblox-twin.env` and enable
+   `qfw-qpm@qblox-twin`. Run examples with
+   `--service-mode site --backend qblox-twin`. The virtual cluster's
+   `qfw-site-services start` starts a fixed set of services that does not
+   include the twin.
 
 From Python, with a reservation as in `examples/tests/test_qiskit_ghz.py`:
 
@@ -102,12 +154,70 @@ job = backend.run(backend.compile(circuit), shots=4096, reservation_id=...)
 `h`, `cx`, `swap`, `u3` and the other gates in `capabilities()["instructions"]`
 itself. Compiling first is what applies the calibration-aware layout.
 
+## Qblox packages
+
+The twin needs no Qblox packages with its default timing. qblox-scheduler is
+only needed to take gate timing from your Qblox configuration, and it **cannot
+be installed into QFw's standard environment**: QFw's IQM client stack pins
+`ruamel.yaml==0.17.32` (through `iqm-exa-common`), and qblox-scheduler 1.x
+needs `ruamel.yaml>=0.18`. A resolver given both either fails or quietly picks
+the empty `qblox-scheduler==0.0.0` release. There are three ways around it.
+
+1. **Bake the durations into the calibration file (recommended).** Run
+   `bake_qblox_durations.py` (in this directory) once, wherever qblox-scheduler
+   is installed (your lab's Qblox environment works), and deploy the file it
+   writes. The QPM then uses Qblox's gate durations from the standard QFw
+   environment, with no Qblox packages:
+
+   ```bash
+   python bake_qblox_durations.py --device quantum_device.yaml \
+     --hardware hardware_config.json --calibration device.json \
+     --output device.qblox.json
+   export QFW_QBLOX_TWIN_DEVICE=/path/device.qblox.json   # on the QPM host
+   ```
+
+   It replaces each qubit's `sq_duration_ns` and each coupler's
+   `cz_duration_ns`, keeps every other number, and records the Measure and
+   Reset durations under `qblox_timing` in the file (the twin does not use
+   them yet). `--elements` maps twin qubits to your element names;
+   `--dry-run` prints the table without writing. The script needs only this
+   directory, numpy and qblox-scheduler, not a QFw install.
+
+2. **Live Qblox timing in the QPM** (`QFW_QBLOX_TWIN_QBLOX_DEVICE`, and
+   `QFW_QBLOX_TWIN_TIMING=circuit` to compile every circuit). The twin's QPM
+   host then needs its own environment, built from
+   `setup/qblox-twin-requirements.txt`: the standard requirements without the
+   `iqm-*` packages, plus `qblox-scheduler==1.0.1`. That host cannot also run
+   the IQM QPMs.
+
+   ```bash
+   uv venv --python 3.12 /path/to/qfw-qblox-venv
+   source /path/to/qfw-qblox-venv/bin/activate
+   uv pip install -r setup/build-requirements.txt \
+     -r setup/qblox-twin-requirements.txt --override setup/overrides.txt
+   source <prefix>/bin/qfw-activate --venv /path/to/qfw-qblox-venv
+   ```
+
+3. **Transmon `QuantumDevice` files** (YAML or JSON with
+   `BasicTransmonElement`) also need `qblox_applications`, which is not on
+   public PyPI and comes from Qblox. Option 1 avoids installing it on QFw
+   hosts: run the script where it is already installed.
+   `DeviceCompilationConfig` files need only qblox-scheduler, unless their
+   operation factories live in `qblox_applications`.
+
+`tests/test_qblox_twin_requirements.py` keeps `qblox-twin-requirements.txt`
+in step with `requirements.txt`, and CI (`ci-resolve`) resolves it next to the
+standard set.
+
 ## Tests
 
 - `tests/test_qblox_twin.py`: the twin's engine and `QbloxTwinQPM` (needs
   numpy; the QuTiP cross-check runs when QuTiP is installed).
 - `tests/test_qblox_timing.py`: Qblox timing, including a hardware compile on
-  a dummy Cluster (skips without qblox-scheduler).
+  a dummy Cluster, and `bake_qblox_durations.py` (skips without
+  qblox-scheduler).
+- `tests/test_qblox_twin_requirements.py`: `setup/qblox-twin-requirements.txt`
+  follows `setup/requirements.txt` without `iqm-*`, plus qblox-scheduler.
 - `tests/mock/test_qblox_twin_qpm.py`: the service, with a stand-in twin,
   since the mock suite stubs numpy: query and directory resolution,
   calibration records, sync and async runs through a reserved QPM, failures,
@@ -135,14 +245,18 @@ itself. Compiling first is what applies the calibration-aware layout.
 | Full-stack run (`qfw_ghz.sh … qblox-twin`) | not yet run against a live DEFw/PRTE deployment |
 | `qblox_timing.py`: schedule, compile, per-op and per-element timing | implemented, tested with qblox-scheduler 1.0.1 (device layer and a dummy Cluster) |
 | Q1Simulator check of the compiled Q1ASM | not done: q1simulator 1.4 needs Qt bindings even headless |
+| `bake_qblox_durations.py` (Qblox durations baked into the calibration) | implemented, tested with qblox-scheduler 1.0.1, including a hardware compile |
+| Twin host environment (`setup/qblox-twin-requirements.txt`) | resolves on Python 3.11, 3.12 and 3.13 (uv, and CI's `ci-resolve`); not yet installed end to end |
+| Fork submodules | DEFw from `delgadoandrea21/DEFw` (pinned commit present); QHW packages from openQSE (pinned commits fetchable) |
 
 ## Remaining work
 
-1. Readout duration: the twin does not time measurement yet, so the
+1. A first run on a live QFw (see "Running on a live QFw").
+2. Readout duration: the twin does not time measurement yet, so the
    admission profile and the target carry no `measurement_ns`. Qblox timing
    already reports the `Measure` and `Reset` durations
    (`QbloxTwinQPM.qblox_durations`) for when it does.
-2. Q1Simulator check of the compiled programs (real-time buffer underruns).
-3. A hybrid (variational) example for the twin: the VQE example reads
+3. Q1Simulator check of the compiled programs (real-time buffer underruns).
+4. A hybrid (variational) example for the twin: the VQE example reads
    statevectors, which the twin does not return, so it needs a shot-based
    estimator (`QFwEstimatorV2`) and a layout fixed from the calibrated target.

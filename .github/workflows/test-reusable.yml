@@ -81,6 +81,15 @@ jobs:
           --override setup/overrides.txt \
           setup/build-requirements.txt setup/requirements.txt \
           -o "$RUNNER_TEMP/resolved.txt"
+    - name: Resolve the Qblox twin host environment
+      # The standard set without the IQM client stack, plus qblox-scheduler:
+      # iqm-exa-common's ruamel.yaml pin keeps the two apart. See the header
+      # of setup/qblox-twin-requirements.txt.
+      run: |
+        uv pip compile \
+          --override setup/overrides.txt \
+          setup/build-requirements.txt setup/qblox-twin-requirements.txt \
+          -o "$RUNNER_TEMP/resolved-qblox-twin.txt"
 
   ci-pulser:
     name: ci-pulser (released Pulser)

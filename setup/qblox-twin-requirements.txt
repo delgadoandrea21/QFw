@@ -1,0 +1,75 @@
+# Python environment for a host that runs the Qblox digital-twin QPM
+# (services/svc_qblox_twin_qpm) with Qblox timing taken live from
+# qblox-scheduler (QFW_QBLOX_TWIN_QBLOX_DEVICE).
+#
+# It is setup/requirements.txt without the IQM client stack, plus
+# qblox-scheduler. The two cannot share an environment: iqm-exa-common pins
+# ruamel.yaml==0.17.32 and qblox-scheduler 1.x needs ruamel.yaml>=0.18. A host
+# built from this file therefore cannot run the IQM QPMs (svc_iqm_qpm, or the
+# shim's IQM devices); run those from the standard environment.
+#
+# The twin itself needs neither: with its default timing, or with durations
+# baked into its calibration file (services/svc_qblox_twin_qpm/
+# bake_qblox_durations.py), the standard environment is enough.
+#
+# Install, from the QFw source tree:
+#   uv venv /path/to/qfw-qblox-venv
+#   source /path/to/qfw-qblox-venv/bin/activate
+#   uv pip install -r setup/build-requirements.txt \
+#     -r setup/qblox-twin-requirements.txt --override setup/overrides.txt
+#
+# Keep the lines below the marker equal to setup/requirements.txt without its
+# iqm-* lines; tests/test_qblox_twin_requirements.py checks that.
+
+# --- setup/requirements.txt without iqm-* ---
+# mqt.core.mlir binds Qiskit's C API per minor release and accepts only the
+# 2.5 series, so this pin tracks the Qiskit the MQT compiler was built for.
+qiskit==2.5.2
+qiskit_aer==0.17.2
+qiskit-algorithms
+qiskit-optimization
+supermarq
+pennylane
+pennylane-qiskit==0.45.1
+qiskit-ibm-runtime
+# qiskit-ibm-runtime asks for ibm-platform-services>=0.22.6, and iqm-client
+# below pins requests==2.32.3 exactly. ibm-platform-services 0.77.0 moved to
+# ibm-cloud-sdk-core>=3.24.4, which needs requests>=2.32.4, so the two cannot
+# both be satisfied and the resolver walks back down the platform-services
+# versions. Without a floor it reaches 0.55.2, the one version in that range
+# published as an sdist only, whose build imports pkg_resources without
+# declaring setuptools and so fails. This floor keeps the resolution on 0.66.1,
+# the version QFw has been building with. It can go once iqm-client stops
+# pinning requests to a single version.
+ibm-platform-services>=0.59
+qiskit_nature
+openfermion>=1.5.2
+mpi4py
+networkx
+matplotlib
+numpy
+scipy
+pyscf
+PyYAML
+jsonschema>=4
+netifaces
+psutil
+paramiko
+rich
+
+# OpenTelemetry: benchmarking and profiling telemetry, see
+# docs/design/benchmarking.md. QFw degrades to no-op instrumentation when
+# these are absent, so they are a soft dependency rather than a hard one.
+opentelemetry-api>=1.44.0
+opentelemetry-sdk>=1.44.0
+# Supplies the OTLP encoders. The SDK ships no file exporter, so the file
+# profile encodes with these and writes OTLP/JSON itself.
+opentelemetry-exporter-otlp-proto-common>=1.44.0
+# The otlp profile (QFW_TELEMETRY=otlp) ships spans and metrics to a
+# collector over OTLP/HTTP with this exporter.
+opentelemetry-exporter-otlp-proto-http>=1.44.0
+
+# --- added for the Qblox twin ---
+# Tested with 1.0.1. Pinned so a resolver cannot fall back to the empty
+# 0.0.0 release when something conflicts.
+qblox-scheduler==1.0.1

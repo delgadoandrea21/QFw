@@ -223,3 +223,67 @@ def test_qpm_facade_takes_its_timing_from_qblox(cal, tmp_path):
     assert per_circuit.metadata(cid)["duration_ns"] == 460.0 + 4 * 8
     once.shutdown()
     per_circuit.shutdown()
+
+
+# ---- bake_qblox_durations.py (option 1: Qblox durations baked into the file)
+
+def _bake_script():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "bake_qblox_durations", SERVICE_DIR / "bake_qblox_durations.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_bake_script_writes_qblox_durations(cal, tmp_path, capsys):
+    import json
+    device = tmp_path / "device_compilation_config.json"
+    device.write_text(qt.device_compilation_config(_slower(cal, sq_ns=48.0, cz_scale=2.0)).model_dump_json())
+    hardware = tmp_path / "hardware.json"
+    hardware.write_text(json.dumps(qt.dummy_cluster_hardware_config(cal)))
+    output = tmp_path / "device.qblox.json"
+
+    assert _bake_script().main(["--device", str(device), "--hardware", str(hardware),
+                                "--output", str(output)]) == 0
+
+    baked = DeviceCal.load(output)
+    original = DeviceCal.load(SERVICE_DIR / "device.example.json")
+    assert [q.sq_duration_ns for q in baked.qubits.values()] == [48.0] * 4
+    assert [c.cz_duration_ns for c in baked.couplers] == [160.0, 200.0, 240.0]
+    for q in original.qubits:          # everything else is kept
+        assert baked.qubits[q].t1_us == original.qubits[q].t1_us
+        assert baked.qubits[q].readout_p10 == original.qubits[q].readout_p10
+    record = json.loads(output.read_text())["qblox_timing"]
+    assert record["measure_ns"] == {str(q): qt.DEFAULT_READOUT_PULSE_NS for q in range(4)}
+    assert record["reset_ns"]["3"] == qt.DEFAULT_RESET_NS
+    assert record["elements"] == {str(q): f"q{q}" for q in range(4)}
+    assert "160 (80)" in capsys.readouterr().out
+    # the deployed twin reads it with no Qblox timing configured
+    twin = QbloxTwinQPM(str(output))
+    assert twin.capabilities()["timing"] == "nominal"
+    assert twin.device.couplers[0].cz_duration_ns == 160.0
+    twin.shutdown()
+
+
+def test_bake_script_dry_run_and_element_names(cal, tmp_path, capsys, monkeypatch):
+    names = {q: f"transmon_{q}" for q in range(4)}
+    device = tmp_path / "device_compilation_config.json"
+    device.write_text(qt.device_compilation_config(cal, element_names=names).model_dump_json())
+    monkeypatch.chdir(tmp_path)
+    script = _bake_script()
+
+    assert script.main(["--device", str(device), "--elements",
+                        "transmon_0,transmon_1,transmon_2,transmon_3", "--dry-run"]) == 0
+    assert "Dry run" in capsys.readouterr().out
+    assert not list(tmp_path.glob("*.qblox.json"))
+    with pytest.raises(SystemExit, match="names 2 elements"):
+        script.main(["--device", str(device), "--elements", "a,b"])
+    with pytest.raises(SystemExit, match="could not time the device"):
+        script.main(["--device", str(device)])          # default q0.. names are not in it
+
+
+def test_bake_script_says_what_to_install_without_qblox(monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "qblox_scheduler", None)
+    with pytest.raises(SystemExit, match="needs qblox-scheduler"):
+        _bake_script().main(["--device", str(tmp_path / "any.json")])
