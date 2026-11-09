@@ -61,6 +61,17 @@ services:
     provider-launch:
       type: internal
 
+  - name: qblox-twin
+    credential-mode: no-secret
+    module: svc_qblox_twin_qpm
+    load-modules: svc_qblox_twin_qpm,api_launcher
+    agent-prefix: qpm_qblox_twin
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    provider-launch:
+      type: internal
+
   - name: backline-local
     credential-mode: no-secret
     module: svc_backline_qpm

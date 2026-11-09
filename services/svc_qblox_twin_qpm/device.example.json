@@ -1,0 +1,63 @@
+{
+  "name": "example-4q",
+  "qubits": {
+    "0": {
+      "t1_us": 45,
+      "t2_us": 38,
+      "readout_p01": 0.008,
+      "readout_p10": 0.015,
+      "sq_error": 0.0003,
+      "sq_duration_ns": 40.0
+    },
+    "1": {
+      "t1_us": 40,
+      "t2_us": 32,
+      "readout_p01": 0.01,
+      "readout_p10": 0.018,
+      "sq_error": 0.0004,
+      "sq_duration_ns": 40.0
+    },
+    "2": {
+      "t1_us": 22,
+      "t2_us": 14,
+      "readout_p01": 0.02,
+      "readout_p10": 0.04,
+      "sq_error": 0.0008,
+      "sq_duration_ns": 40.0
+    },
+    "3": {
+      "t1_us": 15,
+      "t2_us": 9,
+      "readout_p01": 0.03,
+      "readout_p10": 0.06,
+      "sq_error": 0.001,
+      "sq_duration_ns": 40.0
+    }
+  },
+  "couplers": [
+    {
+      "qubits": [
+        0,
+        1
+      ],
+      "cz_error": 0.003,
+      "cz_duration_ns": 80
+    },
+    {
+      "qubits": [
+        1,
+        2
+      ],
+      "cz_error": 0.008,
+      "cz_duration_ns": 100
+    },
+    {
+      "qubits": [
+        2,
+        3
+      ],
+      "cz_error": 0.02,
+      "cz_duration_ns": 120
+    }
+  ]
+}

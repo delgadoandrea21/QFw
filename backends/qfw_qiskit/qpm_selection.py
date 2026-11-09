@@ -42,6 +42,13 @@ QPM_PROVIDER_SELECTIONS = {
 		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
 		"qpm_capabilities": QPMCapability.QPM_CAP_STATEVECTOR,
 	},
+	# The Qblox transmon digital twin: a simulator of a superconducting
+	# device, so it answers neither statevector nor hardware requests.
+	"qblox-twin": {
+		"provider": "qblox-twin",
+		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
+		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
+	},
 	"tnqvm": {
 		"provider": "tnqvm",
 		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
