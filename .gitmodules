@@ -1,24 +1,27 @@
+# Fork note (delgadoandrea21/QFw): DEFw stays relative, so it resolves to the
+# fork of DEFw; the QHW packages are not forked and point at openQSE. Restore
+# the relative ../qhw-*.git URLs before proposing this branch upstream.
 [submodule "DEFw"]
 	path = DEFw
 	url = ../DEFw.git
 	branch = master
 [submodule "external/qhw-data"]
 	path = external/qhw-data
-	url = ../qhw-data.git
+	url = https://github.com/openQSE/qhw-data.git
 	branch = main
 [submodule "external/qhw-iqm"]
 	path = external/qhw-iqm
-	url = ../qhw-iqm.git
+	url = https://github.com/openQSE/qhw-iqm.git
 	branch = main
 [submodule "external/qhw-admission"]
 	path = external/qhw-admission
-	url = ../qhw-admission.git
+	url = https://github.com/openQSE/qhw-admission.git
 	branch = main
 [submodule "external/qhw-scheduler"]
 	path = external/qhw-scheduler
-	url = ../qhw-scheduler.git
+	url = https://github.com/openQSE/qhw-scheduler.git
 	branch = main
 [submodule "external/qhw-ibm"]
 	path = external/qhw-ibm
-	url = ../qhw-ibm.git
+	url = https://github.com/openQSE/qhw-ibm.git
 	branch = main
