@@ -46,9 +46,42 @@ environment of the QPM process:
 | `QFW_QBLOX_TWIN_ENGINE` | `numpy` or `qutip` | `numpy` |
 | `QFW_QBLOX_TWIN_SEED` | integer seed for shot sampling | unseeded |
 | `device-id` in the services file (`QFW_QPU_DEVICE_ID`) | id the QPM serves the device under | `qblox-twin-<calibration name>` |
+| `QFW_QBLOX_TWIN_QBLOX_DEVICE` | Qblox `QuantumDevice` (YAML/JSON) or `DeviceCompilationConfig` (JSON) to take gate timing from | unset: durations from the calibration JSON |
+| `QFW_QBLOX_TWIN_QBLOX_HARDWARE` | Qblox hardware config JSON, so compiles also generate and check Q1ASM | unset: device-layer compile |
+| `QFW_QBLOX_TWIN_TIMING` | `durations`: gate durations from Qblox once at start; `circuit`: also compile every circuit and simulate on its schedule | `durations` |
+| `QFW_QBLOX_TWIN_QBLOX_ELEMENTS` | device element for each twin qubit, comma separated | `q0,q1,...` |
 
 The calibration set id the QPM publishes is the calibration's name plus a
-hash of its numbers, so it changes whenever the JSON does.
+hash of its numbers, so it changes whenever the JSON does, and when Qblox
+timing replaces its durations. The `timing` query property says which
+timing is in use (`nominal`, `qblox-durations` or `qblox-circuit`).
+
+## Timing from Qblox
+
+`qfw_qblox_twin/qblox_timing.py` builds a qblox-scheduler `TimeableSchedule`
+from the twin's native ops (one `Rxy` per pulse, `CZ`, a `Measure` after
+every qubit's last gate, a `Reset` first when configured), with each
+operation waiting on the last one on each of its qubits: the ASAP schedule
+the twin uses itself. It compiles that with your device config (and
+hardware config, if given) and reads each operation's start and duration
+back. With the twin's own durations the two schedules agree to the
+picosecond; with yours, the twin simulates decoherence on Qblox's times.
+
+```python
+from qfw_qblox_twin import DeviceCal, TwinBackend, qblox_timing as qt
+cal = DeviceCal.load("device.json")
+config = qt.compilation_config("quantum_device.yaml", "hardware_config.json")
+cal = qt.apply_qblox_durations(cal, qt.qblox_operation_durations(cal, config))  # once
+twin = TwinBackend(cal, timing=lambda c: qt.durations_from_qblox_scheduler(c, config))
+```
+
+A device-layer compile of a small circuit takes milliseconds; with a
+hardware config it is about half a second, so `circuit` mode is for
+studying schedules rather than throughput. Transmon `QuantumDevice` files
+need the element classes from `qblox_applications`;
+`qt.device_compilation_config(cal)` and `qt.dummy_cluster_hardware_config(cal)`
+build configs from a twin calibration when you have neither. Requires
+qblox-scheduler (tested with 1.0.1), which the rest of the twin never imports.
 
 ## Running
 
@@ -73,6 +106,8 @@ itself. Compiling first is what applies the calibration-aware layout.
 
 - `tests/test_qblox_twin.py`: the twin's engine and `QbloxTwinQPM` (needs
   numpy; the QuTiP cross-check runs when QuTiP is installed).
+- `tests/test_qblox_timing.py`: Qblox timing, including a hardware compile on
+  a dummy Cluster (skips without qblox-scheduler).
 - `tests/mock/test_qblox_twin_qpm.py`: the service, with a stand-in twin,
   since the mock suite stubs numpy: query and directory resolution,
   calibration records, sync and async runs through a reserved QPM, failures,
@@ -98,11 +133,16 @@ itself. Compiling first is what applies the calibration-aware layout.
 | QuTiP engine (`QFW_QBLOX_TWIN_ENGINE=qutip`) | implemented; matches numpy (Hellinger > 0.9999 on GHZ-3, QuTiP 5.3) |
 | QFw service: registration, sync/async, cancel, telemetry | implemented, tested in the mock suite and end to end (Qiskit target → transpile → QPM → twin) with DEFw stubbed |
 | Full-stack run (`qfw_ghz.sh … qblox-twin`) | not yet run against a live DEFw/PRTE deployment |
-| `qblox_timing.py` (Qblox Scheduler / Q1Simulator durations) | stub only |
+| `qblox_timing.py`: schedule, compile, per-op and per-element timing | implemented, tested with qblox-scheduler 1.0.1 (device layer and a dummy Cluster) |
+| Q1Simulator check of the compiled Q1ASM | not done: q1simulator 1.4 needs Qt bindings even headless |
 
 ## Remaining work
 
-1. Implement `qfw_qblox_twin/qblox_timing.py` against your qblox-scheduler version.
-2. Readout duration: the twin does not time measurement, so the admission
-   profile and the target carry no `measurement_ns`.
-3. Hybrid loop on top of the calibration-aware layout.
+1. Readout duration: the twin does not time measurement yet, so the
+   admission profile and the target carry no `measurement_ns`. Qblox timing
+   already reports the `Measure` and `Reset` durations
+   (`QbloxTwinQPM.qblox_durations`) for when it does.
+2. Q1Simulator check of the compiled programs (real-time buffer underruns).
+3. A hybrid (variational) example for the twin: the VQE example reads
+   statevectors, which the twin does not return, so it needs a shot-based
+   estimator (`QFwEstimatorV2`) and a layout fixed from the calibrated target.

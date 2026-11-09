@@ -19,9 +19,25 @@ QBLOX_TWIN_BACKEND = "qblox-twin"
 #                          runs DeviceCal.example_4q()
 #   QFW_QBLOX_TWIN_ENGINE  numpy (default) or qutip
 #   QFW_QBLOX_TWIN_SEED    integer seed for shot sampling; unset is unseeded
+# Timing from the Qblox compile flow (needs qblox-scheduler; see
+# qfw_qblox_twin/qblox_timing.py):
+#   QFW_QBLOX_TWIN_QBLOX_DEVICE    QuantumDevice YAML/JSON, or a
+#                                  DeviceCompilationConfig JSON; unset keeps
+#                                  the calibration file's gate durations
+#   QFW_QBLOX_TWIN_QBLOX_HARDWARE  Qblox hardware config JSON (optional)
+#   QFW_QBLOX_TWIN_TIMING          durations (default): gate durations from
+#                                  Qblox once, at start; circuit: also
+#                                  compile and time every circuit
+#   QFW_QBLOX_TWIN_QBLOX_ELEMENTS  device element per twin qubit, comma
+#                                  separated; unset is q0,q1,...
 DEVICE_ENV = "QFW_QBLOX_TWIN_DEVICE"
 ENGINE_ENV = "QFW_QBLOX_TWIN_ENGINE"
 SEED_ENV = "QFW_QBLOX_TWIN_SEED"
+QBLOX_DEVICE_ENV = "QFW_QBLOX_TWIN_QBLOX_DEVICE"
+QBLOX_HARDWARE_ENV = "QFW_QBLOX_TWIN_QBLOX_HARDWARE"
+TIMING_ENV = "QFW_QBLOX_TWIN_TIMING"
+QBLOX_ELEMENTS_ENV = "QFW_QBLOX_TWIN_QBLOX_ELEMENTS"
+TIMING_MODES = ("durations", "circuit")
 # The same names the QPM controller reads for its target id. A device-id in
 # the services file arrives as QFW_QPU_DEVICE_ID.
 TARGET_ID_ENV = "QFW_QPM_TARGET_ID"
@@ -43,14 +59,47 @@ def twin_from_environment():
 		seed = int(seed) if seed else None
 	except ValueError:
 		raise DEFwError(f"{SEED_ENV} must be an integer: {seed!r}") from None
+	qblox = _qblox_options_from_environment()
 	# Imported here, not at the top: the twin needs a real numpy, and the
 	# service module should load without one.
 	from .qfw_qblox_twin.qpm_service import QbloxTwinQPM
 
 	logging.debug(
 		f"qblox twin: device={device or 'example-4q'} engine={engine} "
-		f"seed={seed}")
-	return QbloxTwinQPM(device, engine=engine, seed=seed)
+		f"seed={seed} qblox={qblox}")
+	return QbloxTwinQPM(device, engine=engine, seed=seed, **qblox)
+
+
+def _qblox_options_from_environment():
+	def path(env_name):
+		value = os.environ.get(env_name, "").strip() or None
+		if value is not None and not os.path.isfile(value):
+			raise DEFwError(f"{env_name}={value} is not a file")
+		return value
+
+	qblox_device = path(QBLOX_DEVICE_ENV)
+	qblox_hardware = path(QBLOX_HARDWARE_ENV)
+	timing = os.environ.get(TIMING_ENV, "").strip().lower()
+	elements = os.environ.get(QBLOX_ELEMENTS_ENV, "").strip()
+	if timing and timing not in TIMING_MODES:
+		raise DEFwError(
+			f"{TIMING_ENV} must be one of {', '.join(TIMING_MODES)}: {timing!r}")
+	if qblox_device is None:
+		for env_name, value in ((QBLOX_HARDWARE_ENV, qblox_hardware),
+					(TIMING_ENV, timing), (QBLOX_ELEMENTS_ENV, elements)):
+			if value:
+				raise DEFwError(f"{env_name} needs {QBLOX_DEVICE_ENV}")
+		return {}
+	options = {
+		"qblox_device": qblox_device,
+		"qblox_hardware": qblox_hardware,
+		"qblox_per_circuit": timing == "circuit",
+	}
+	if elements:
+		options["element_names"] = {
+			index: name.strip()
+			for index, name in enumerate(elements.split(","))}
+	return options
 
 
 def qblox_twin_device_id(twin):

@@ -146,7 +146,9 @@ def _environment(monkeypatch):
 	_clear_target_controllers_for_tests()
 	for name in ("QFW_QPM_TARGET_ID", "QFW_QPU_DEVICE_ID",
 		     "QFW_QBLOX_TWIN_DEVICE", "QFW_QBLOX_TWIN_ENGINE",
-		     "QFW_QBLOX_TWIN_SEED", "QFW_SITE_CONFIG"):
+		     "QFW_QBLOX_TWIN_SEED", "QFW_QBLOX_TWIN_QBLOX_DEVICE",
+		     "QFW_QBLOX_TWIN_QBLOX_HARDWARE", "QFW_QBLOX_TWIN_TIMING",
+		     "QFW_QBLOX_TWIN_QBLOX_ELEMENTS", "QFW_SITE_CONFIG"):
 		monkeypatch.delenv(name, raising=False)
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:1")
 	monkeypatch.setattr(util_qpm, "qpm_initialized", True)
@@ -393,6 +395,40 @@ def test_twin_from_environment_rejects_a_missing_device_file(
 		twin_from_environment()
 
 
+def test_qblox_timing_options_come_from_the_environment(monkeypatch, tmp_path):
+	from defw_exception import DEFwError
+	from svc_qblox_twin_qpm.svc_qrc import _qblox_options_from_environment
+
+	assert _qblox_options_from_environment() == {}
+	device = tmp_path / "device.json"
+	device.write_text("{}")
+	hardware = tmp_path / "hardware.json"
+	hardware.write_text("{}")
+	monkeypatch.setenv("QFW_QBLOX_TWIN_QBLOX_DEVICE", str(device))
+	assert _qblox_options_from_environment() == {
+		"qblox_device": str(device), "qblox_hardware": None,
+		"qblox_per_circuit": False}
+
+	monkeypatch.setenv("QFW_QBLOX_TWIN_QBLOX_HARDWARE", str(hardware))
+	monkeypatch.setenv("QFW_QBLOX_TWIN_TIMING", "circuit")
+	monkeypatch.setenv("QFW_QBLOX_TWIN_QBLOX_ELEMENTS", "qa, qb,qc,qd")
+	assert _qblox_options_from_environment() == {
+		"qblox_device": str(device), "qblox_hardware": str(hardware),
+		"qblox_per_circuit": True,
+		"element_names": {0: "qa", 1: "qb", 2: "qc", 3: "qd"}}
+
+	monkeypatch.setenv("QFW_QBLOX_TWIN_TIMING", "sometimes")
+	with pytest.raises(DEFwError, match="must be one of durations, circuit"):
+		_qblox_options_from_environment()
+	monkeypatch.setenv("QFW_QBLOX_TWIN_TIMING", "durations")
+	monkeypatch.setenv("QFW_QBLOX_TWIN_QBLOX_DEVICE", str(tmp_path / "gone.json"))
+	with pytest.raises(DEFwError, match="is not a file"):
+		_qblox_options_from_environment()
+	monkeypatch.delenv("QFW_QBLOX_TWIN_QBLOX_DEVICE")
+	with pytest.raises(DEFwError, match="needs QFW_QBLOX_TWIN_QBLOX_DEVICE"):
+		_qblox_options_from_environment()
+
+
 # ---- QPM -------------------------------------------------------------------
 
 def test_query_presents_a_superconducting_simulator_with_a_device():
@@ -414,6 +450,7 @@ def test_query_presents_a_superconducting_simulator_with_a_device():
 	assert properties["basis_gates"] == ["rz", "rx", "ry", "cz"]
 	assert "measure" in properties["instructions"]
 	assert properties["calibration_set_id"].startswith("example-4q:")
+	assert properties["timing"] == "nominal"
 	assert info["service_id"] == f"qpm:qblox-twin:{DEVICE_ID}"
 	assert DEVICE_ID in info["selector"]["resources"]
 	assert "QBLOX-TWIN-4q" in info["selector"]["resources"]

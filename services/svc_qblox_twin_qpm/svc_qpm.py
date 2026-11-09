@@ -59,6 +59,9 @@ class QPM(UTIL_QPM):
 				"basis_gates": capabilities["basis"],
 				"coupling_map": capabilities["coupling_map"],
 				"engine": capabilities["engine"],
+				# nominal, qblox-durations or qblox-circuit: where the
+				# twin's gate times come from (see svc_qrc.py)
+				"timing": capabilities.get("timing", "nominal"),
 				"calibration_set_id": calibration_set_id(self.twin.device),
 			})
 		logging.debug(f"Qblox twin {SERVICE_DESC}: {info}")

@@ -11,6 +11,7 @@ from __future__ import annotations
 import threading
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
+from functools import partial
 from typing import Callable, Dict, List, Optional
 
 from .calibration import DeviceCal
@@ -18,11 +19,44 @@ from .qasm import SUPPORTED_GATES
 from .twin import TwinBackend
 
 
+TIMING_NOMINAL = "nominal"
+TIMING_QBLOX_DURATIONS = "qblox-durations"
+TIMING_QBLOX_CIRCUIT = "qblox-circuit"
+
+
 class QbloxTwinQPM:
+    """The twin behind a QPM-style API.
+
+    Timing comes from the DeviceCal unless ``qblox_device`` is given (a
+    QuantumDevice, DeviceCompilationConfig or a file of either; see
+    ``qblox_timing.compilation_config``). Then the gate durations are taken
+    from the Qblox compile flow once, here, and with ``qblox_per_circuit``
+    every circuit is also compiled and simulated on its Qblox schedule.
+    ``qblox_hardware`` adds a Qblox hardware config to those compiles.
+    """
+
     def __init__(self, device_path: Optional[str] = None, engine: str = "numpy",
-                 seed: Optional[int] = None, max_workers: int = 2):
+                 seed: Optional[int] = None, max_workers: int = 2,
+                 qblox_device=None, qblox_hardware=None,
+                 qblox_per_circuit: bool = False,
+                 element_names: Optional[Dict[int, str]] = None):
         device = DeviceCal.load(device_path) if device_path else DeviceCal.example_4q()
-        self._backend = TwinBackend(device, engine=engine, seed=seed)
+        timing = None
+        self.timing_mode = TIMING_NOMINAL
+        self.qblox_durations: Dict[tuple, float] = {}
+        if qblox_device is not None:
+            from . import qblox_timing
+
+            config = qblox_timing.compilation_config(qblox_device, qblox_hardware)
+            self.qblox_durations = qblox_timing.qblox_operation_durations(
+                device, config, element_names=element_names)
+            device = qblox_timing.apply_qblox_durations(device, self.qblox_durations)
+            self.timing_mode = TIMING_QBLOX_DURATIONS
+            if qblox_per_circuit:
+                timing = partial(qblox_timing.durations_from_qblox_scheduler,
+                                 quantum_device=config, element_names=element_names)
+                self.timing_mode = TIMING_QBLOX_CIRCUIT
+        self._backend = TwinBackend(device, engine=engine, seed=seed, timing=timing)
         self._lock = threading.Lock()          # TwinBackend shares one RNG
         self._pool = ThreadPoolExecutor(max_workers=max_workers,
                                         thread_name_prefix="qblox-twin")
@@ -41,6 +75,7 @@ class QbloxTwinQPM:
             "type": "simulator",
             "name": f"qblox-twin:{d.name}",
             "engine": self._backend.engine,
+            "timing": self.timing_mode,
             "num_qubits": d.n_qubits,
             "coupling_map": [list(c.qubits) for c in d.couplers],
             "basis": ["rz", "rx", "ry", "cz"],

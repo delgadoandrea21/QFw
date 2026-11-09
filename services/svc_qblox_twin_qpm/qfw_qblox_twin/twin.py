@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import warnings
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 
@@ -32,13 +32,24 @@ def hellinger_fidelity(p: Dict[str, float], q: Dict[str, float]) -> float:
 
 
 class TwinBackend:
+    """Simulates OpenQASM 2.0 on a DeviceCal.
+
+    ``timing``, if given, is called with each parsed Circuit and returns its
+    schedule: an object with ``ops`` (one entry per ``circuit.ops``, each
+    ``None`` or having ``start_ns`` and ``duration_ns``) and ``measure`` (the
+    same, or ``None``), such as ``qblox_timing.QbloxTiming``. Without it the
+    twin schedules ASAP with the DeviceCal durations.
+    """
+
     def __init__(self, device: DeviceCal, engine: str = "numpy",
-                 seed: Optional[int] = None, strict_connectivity: bool = False):
+                 seed: Optional[int] = None, strict_connectivity: bool = False,
+                 timing: Optional[Callable[[Circuit], Any]] = None):
         if engine not in ("numpy", "qutip"):
             raise ValueError("engine must be 'numpy' or 'qutip'")
         self.device = device
         self.engine = engine
         self.strict = strict_connectivity
+        self.timing = timing
         self.rng = np.random.default_rng(seed)
         self._warned_pairs = set()
         if engine == "qutip":
@@ -59,7 +70,8 @@ class TwinBackend:
     def exact_probabilities(self, qasm: str):
         """Shot-noise-free outcome distribution {bitstring: prob} + metadata."""
         circ = parse_qasm(qasm)
-        return self._simulate(circ)
+        timing = self.timing(circ) if self.timing is not None else None
+        return self._simulate(circ, timing)
 
     # ----------------------------------------------------------- internals
     def _cal_coupler(self, a, b) -> CouplerCal:
@@ -75,10 +87,12 @@ class TwinBackend:
             self._warned_pairs.add(key)
         return CouplerCal((a, b))
 
-    def _simulate(self, circ: Circuit):
+    def _simulate(self, circ: Circuit, timing=None):
         n = circ.n_qubits
         if n > self.device.n_qubits:
             raise ValueError(f"circuit needs {n} qubits, device has {self.device.n_qubits}")
+        if timing is not None and len(timing.ops) != len(circ.ops):
+            raise ValueError(f"timing has {len(timing.ops)} ops, circuit has {len(circ.ops)}")
         cal = self.device.qubits
         rho = noise.zero_state(n)
         clock = [0.0] * n
@@ -92,36 +106,45 @@ class TwinBackend:
                     rho = self._decohere(rho, q, n, idle, cal[q].t1_us, cal[q].t2_us)
                 clock[q] = start
 
-        for op in circ.ops:
+        for index, op in enumerate(circ.ops):
+            scheduled = timing.ops[index] if timing is not None else None
             if op.kind == "sq":
                 q = op.qubits[0]
-                dur = cal[q].sq_duration_ns * op.pulses
-                advance([q], clock[q], dur)
+                if scheduled is None:
+                    start, dur = clock[q], cal[q].sq_duration_ns * op.pulses
+                else:
+                    start, dur = scheduled.start_ns, scheduled.duration_ns
+                advance([q], start, dur)
                 half = dur / 2
                 rho = self._decohere(rho, q, n, half, cal[q].t1_us, cal[q].t2_us)
                 rho = noise.apply_1q(rho, op.unitary, q, n)
                 rho = self._decohere(rho, q, n, half, cal[q].t1_us, cal[q].t2_us)
                 for _ in range(op.pulses):
                     rho = noise.depolarize_1q(rho, q, n, cal[q].sq_error)
-                clock[q] += dur
+                clock[q] = start + dur
                 n_pulses += op.pulses
             else:  # cz
                 a, b = op.qubits
                 cc = self._cal_coupler(a, b)
-                start = max(clock[a], clock[b])
-                advance([a, b], start, cc.cz_duration_ns)
-                half = cc.cz_duration_ns / 2
+                if scheduled is None:
+                    start, dur = max(clock[a], clock[b]), cc.cz_duration_ns
+                else:
+                    start, dur = scheduled.start_ns, scheduled.duration_ns
+                advance([a, b], start, dur)
+                half = dur / 2
                 for q in (a, b):
                     rho = self._decohere(rho, q, n, half, cal[q].t1_us, cal[q].t2_us)
                 rho = noise.apply_2q(rho, noise.CZ, a, b, n)
                 for q in (a, b):
                     rho = self._decohere(rho, q, n, half, cal[q].t1_us, cal[q].t2_us)
                 rho = noise.depolarize_2q(rho, a, b, n, cc.cz_error)
-                clock[a] = clock[b] = start + cc.cz_duration_ns
+                clock[a] = clock[b] = start + dur
                 n_cz += 1
 
         # align all qubits at readout time
         end = max(clock) if clock else 0.0
+        if timing is not None and timing.measure is not None:
+            end = max(end, timing.measure.start_ns)
         advance(range(n), end, 0.0)
 
         # outcome probabilities, readout confusion, marginalise to measured
@@ -155,5 +178,6 @@ class TwinBackend:
         total = sum(probs.values())
         probs = {k: v / total for k, v in probs.items()}
         meta = {"device": self.device.name, "engine": self.engine,
-                "duration_ns": end, "n_cz": n_cz, "n_pulses": n_pulses}
+                "duration_ns": end, "n_cz": n_cz, "n_pulses": n_pulses,
+                "timing": "nominal" if timing is None else getattr(timing, "source", "external")}
         return probs, meta
