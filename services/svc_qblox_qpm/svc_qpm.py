@@ -2,18 +2,22 @@ import logging
 import os
 
 from .svc_qrc import QRC
-from .util_qblox import device_qubit_count, strip_quotes
+from .util_qblox import device_qubit_count, simulation_requested, strip_quotes
 from util.qpm.util_circuit import set_max_qubits_pp
 from util.qpm.util_qpm import UTIL_QPM
 from util.circuit_payload import qiskit_circuit_formats
 
-QBLOX_PROVIDER = "qblox"
-
-# One module, two identities: which one this process is comes from whether
-# a cluster address is configured.
-QBLOX_IS_DUMMY = not strip_quotes(os.environ.get("QBLOX_CLUSTER_IP"))
+# One module, three identities. The simulated Cluster runs when
+# QBLOX_SIMULATE is set or QFw starts this as the qblox-sim service;
+# otherwise a configured cluster address selects the real instrument, and
+# none selects qblox-scheduler's dummy cluster.
+QBLOX_IS_SIMULATED = simulation_requested()
+QBLOX_IS_DUMMY = (not QBLOX_IS_SIMULATED and
+		  not strip_quotes(os.environ.get("QBLOX_CLUSTER_IP")))
+QBLOX_PROVIDER = "qblox-sim" if QBLOX_IS_SIMULATED else "qblox"
 QBLOX_TARGET_ID = os.environ.get(
 	"QFW_QBLOX_TARGET_ID",
+	"qblox-sim" if QBLOX_IS_SIMULATED else
 	"qblox-dummy" if QBLOX_IS_DUMMY else "qblox-cluster")
 
 # Read at import: UTIL_QPM needs a static count before HardwareAgent exists,
@@ -96,7 +100,7 @@ class QPM(UTIL_QPM):
 		# No QFW_CAP_STATEVECTOR: Qblox returns thresholded shots, so the
 		# VQE example correctly skips this backend.
 		info = self.query_helper(
-			QPMType.QPM_TYPE_SIMULATOR if QBLOX_IS_DUMMY
+			QPMType.QPM_TYPE_SIMULATOR if (QBLOX_IS_DUMMY or QBLOX_IS_SIMULATED)
 			else QPMType.QPM_TYPE_HARDWARE,
 			QPMCapability.QPM_CAP_SUPERCONDUCTING,
 			SERVICE_NAME, SERVICE_DESC,

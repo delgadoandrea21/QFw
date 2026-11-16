@@ -79,6 +79,14 @@ QPM_PROVIDER_SELECTIONS = {
 		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
 		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
 	},
+	# The same module running its simulated Cluster: Q1ASM in q1simulator
+	# driving a QuTiP model of the chip. Its own provider name keeps it
+	# apart from qblox-dummy.
+	"qblox-sim": {
+		"provider": "qblox-sim",
+		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
+		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
+	},
 }
 
 

@@ -129,3 +129,16 @@ services:
     assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
     provider-launch:
       type: internal
+
+  # The same module with its simulated Cluster: Q1ASM runs in q1simulator
+  # and drives a QuTiP model of the chip. The service name selects the mode.
+  - name: qblox-sim
+    credential-mode: no-secret
+    module: svc_qblox_qpm
+    load-modules: svc_qblox_qpm,api_launcher
+    agent-prefix: qpm_qblox_sim
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    provider-launch:
+      type: internal

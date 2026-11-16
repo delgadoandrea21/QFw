@@ -100,8 +100,10 @@ services for Qblox:
   transmon chip, with gate timing optionally taken from Qblox
   ([README](services/svc_qblox_twin_qpm/README.md)).
 - `services/svc_qblox_qpm`, from Smriti's `dell_qblox` branch
-  (BajajSmriti/QFw), which runs circuits on a Qblox Cluster, or on
-  qblox-scheduler's dummy cluster when no address is set
+  (BajajSmriti/QFw), which runs circuits on a Qblox Cluster, on
+  qblox-scheduler's dummy cluster when no address is set, or, as
+  `qblox-sim`, on a simulated Cluster: the compiled Q1ASM runs in
+  q1simulator and drives a QuTiP model of the chip
   ([README](services/svc_qblox_qpm/README.md)).
 
 Clone the fork rather than openQSE/QFw:

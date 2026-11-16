@@ -85,6 +85,20 @@ services:
     provider-launch:
       type: internal
 
+  # The simulated Cluster: Q1ASM in q1simulator driving a QuTiP model of
+  # the chip. The service name selects the mode.
+  - name: qblox-sim
+    credential-mode: no-secret
+    module: svc_qblox_qpm
+    load-modules: svc_qblox_qpm,api_launcher
+    agent-prefix: qpm_qblox_sim
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    listen-port: 9290
+    telnet-port: 9291
+    provider-launch:
+      type: internal
+
   # The real instrument.
   - name: qblox-cluster
     credential-mode: no-secret

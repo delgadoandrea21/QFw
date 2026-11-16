@@ -33,6 +33,10 @@ iqm-station-control-client==12.1.1
 # dlopens libGL, so the image also needs the mesa-libGL system package.
 qblox-scheduler==1.0.0b4
 qblox-instruments==1.2.1
+# svc_qblox_qpm's simulated Cluster (qblox-sim): runs Q1ASM and simulates the
+# qubits. q1simulator needs Python 3.12 or later; on 3.11 qblox-sim is unavailable.
+q1simulator==1.4.1; python_version >= "3.12"
+qutip==5.3.1
 qiskit_nature
 openfermion>=1.5.2
 mpi4py

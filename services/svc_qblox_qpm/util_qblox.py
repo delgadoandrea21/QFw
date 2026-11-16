@@ -21,6 +21,9 @@ DEFAULT_WAIT_DONE_TIMEOUT = 10.0
 # qblox-scheduler is imported lazily inside the agent build, so the service
 # module can be loaded (and queried) on a node without the stack installed.
 REQUIRED_PACKAGES = ("qblox-scheduler", "qblox-instruments")
+# The simulated Cluster (qblox_sim/) also runs Q1ASM and the qubit physics.
+SIMULATION_PACKAGES = ("q1simulator", "qutip")
+SIMULATED_SERVICE_NAME = "qblox-sim"
 
 # Short names map to their QBLOX_* equivalents.
 ENV_ALIASES = {
@@ -160,6 +163,40 @@ def check_qblox_packages():
 		raise DEFwExecutionError(
 			f"missing required package(s): {', '.join(missing)}. QFw Qblox "
 			"services require the qblox-scheduler stack in the QFw venv.")
+
+
+def simulation_requested():
+	"""Whether this process runs the simulated Cluster: QBLOX_SIMULATE is
+	set, or QFw started it as the qblox-sim service (manifests carry no
+	environment, so the service name selects the mode there)."""
+	value = (strip_quotes(os.environ.get("QBLOX_SIMULATE")) or "").lower()
+	if value in ("1", "true", "yes", "on"):
+		return True
+	if value in ("0", "false", "no", "off"):
+		return False
+	if value:
+		raise DEFwExecutionError(
+			f"QBLOX_SIMULATE={value!r}: use 1 to simulate, 0 or unset not to")
+	return strip_quotes(os.environ.get("QFW_QPM_SERVICE_NAME")) == SIMULATED_SERVICE_NAME
+
+
+def check_simulation_packages():
+	missing = []
+	for name in SIMULATION_PACKAGES:
+		try:
+			package_version(name)
+		except PackageNotFoundError:
+			missing.append(name)
+	if missing:
+		raise DEFwExecutionError(
+			f"missing package(s) for the simulated Cluster: {', '.join(missing)}. "
+			"Install them in the QFw venv (q1simulator needs Python 3.12 or later).")
+
+
+def _simulated_cluster_class():
+	from importlib import import_module
+	module = (__package__ + ".qblox_sim.cluster") if __package__ else "qblox_sim.cluster"
+	return import_module(module).SimulatedCluster
 
 
 def resolve_config_path(value, default_name):
@@ -445,6 +482,7 @@ class QbloxServiceClient:
 
 	def __init__(self):
 		self._agent = None
+		self._sim = None
 		self._agent_lock = threading.Lock()
 		self._execute_lock = threading.Lock()
 		self._config = None
@@ -506,6 +544,52 @@ class QbloxServiceClient:
 			logging.info(f"HardwareAgent ready: {num_qubits} qubits")
 			return self._agent
 
+	def simulated_cluster(self):
+		"""The simulated Cluster, built on first use. With QBLOX_SIM_DEVICE
+		unset, it matches a chip to the device config and calibrates the
+		config against it, which takes a few seconds."""
+		with self._agent_lock:
+			if self._sim is not None:
+				return self._sim
+			check_qblox_packages()
+			check_simulation_packages()
+			config = load_qblox_service_config()
+			if config.get("cluster_ip"):
+				logging.warning(
+					"simulated Cluster selected; ignoring the cluster address "
+					f"{config['cluster_ip']}")
+			config["cluster_ip"] = None
+			config["device_id"] = os.environ.get(QPU_DEVICE_ENV, SIMULATED_SERVICE_NAME)
+			hardware_cfg = read_json_config(config["hardware_config"], "hardware")
+			device_cfg = read_json_config(config["device_config"], "device")
+			sim_device = None
+			sim_path = strip_quotes(os.environ.get("QBLOX_SIM_DEVICE"))
+			if sim_path:
+				sim_path = resolve_config_path(sim_path, "sim_device.json")
+				sim_device = read_json_config(sim_path, "simulated chip")
+				config["sim_device"] = sim_path
+			seed = strip_quotes(os.environ.get("QBLOX_SIM_SEED"))
+			try:
+				sim = _simulated_cluster_class()(
+					hardware_cfg, device_cfg, sim_device=sim_device,
+					seed=int(seed) if seed else None)
+			except (ValueError, RuntimeError) as exc:
+				raise DEFwExecutionError(f"simulated Cluster: {exc}") from exc
+			for note in sim.notes:
+				logging.info(f"qblox-sim: {note}")
+			self._sim = sim
+			self._config = config
+			self._num_qubits = len(device_cfg.get("elements", {}))
+			return self._sim
+
+	def is_simulated(self):
+		return simulation_requested()
+
+	def mode(self):
+		if self.is_simulated():
+			return "simulated"
+		return "dummy" if self.is_dummy() else "cluster"
+
 	def device_id(self):
 		if self._config is None:
 			return os.environ.get(QPU_DEVICE_ENV)
@@ -517,6 +601,8 @@ class QbloxServiceClient:
 		return device_qubit_count()
 
 	def is_dummy(self):
+		if self.is_simulated():
+			return False
 		if self._config is None:
 			return not strip_quotes(os.environ.get("QBLOX_CLUSTER_IP"))
 		return self._config.get("cluster_ip") is None
@@ -581,7 +667,9 @@ class QbloxServiceClient:
 		info = circ.info
 		cid = circ.get_cid()
 		credential = getattr(circ, "provider_credential", None)
-		agent = self.agent(credential=credential)
+		simulated = self.is_simulated()
+		sim = self.simulated_cluster() if simulated else None
+		agent = None if simulated else self.agent(credential=credential)
 
 		shots = int(info.get("num_shots", info.get("shots", 1024)))
 		circuit = qiskit_input(info)
@@ -601,13 +689,23 @@ class QbloxServiceClient:
 			queue_wait = time.monotonic() - start
 			exec_started = time.monotonic()
 			stage_timings_ms = None
-			if self._profile_stages:
+			if simulated:
+				# Every shot plays the same pulses: compile and simulate
+				# one repetition, then sample the shots.
+				schedule, measured = build_schedule(circuit, 1)
+				dataset = sim.run(schedule, shots)
+				if self._profile_stages:
+					stage_timings_ms = {
+						stage: 1e3 * sim.last_run[f"{stage}_s"]
+						for stage in ("compile", "q1asm", "physics")}
+			elif self._profile_stages:
 				dataset, measured, stage_timings_ms = self._run_staged(
 					agent, circuit, shots)
 			else:
 				schedule, measured = build_schedule(circuit, shots)
 				dataset = agent.run(schedule)
-			self._log_compiled_schedule(agent)
+			if agent is not None:
+				self._log_compiled_schedule(agent)
 			exec_seconds = time.monotonic() - exec_started
 
 		# Raw per-shot values distinguish "acquisition varies but always
@@ -635,7 +733,7 @@ class QbloxServiceClient:
 			"backend": "qblox",
 			"metadata_supported": True,
 			"metadata_available": True,
-			"mode": "dummy" if self.is_dummy() else "cluster",
+			"mode": self.mode(),
 			"device_id": self.device_id(),
 			"input": {
 				"shots": shots,
@@ -650,6 +748,13 @@ class QbloxServiceClient:
 			},
 			"timing": timing,
 		}
+		if simulated:
+			metadata["simulation"] = {
+				"chip": sim.device.name,
+				"matched_to_device_config": sim.matched,
+				"notes": list(sim.notes),
+				"simulated_qubits": list(sim.last_run.get("elements", [])),
+			}
 
 		self._latest_cid = cid
 		self._last_timing[cid] = timing
@@ -675,7 +780,7 @@ class QbloxServiceClient:
 		return {
 			"backend": "qblox",
 			"metadata_supported": True,
-			"mode": "dummy" if self.is_dummy() else "cluster",
+			"mode": self.mode(),
 			"num_qubits": self.num_qubits(),
 			"device_id": self.device_id(),
 		}
@@ -693,7 +798,12 @@ class QbloxServiceClient:
 
 	def get_calibration_snapshot(self, calibration_set_id=None):
 		config = self._config or load_qblox_service_config()
-		device_cfg = read_json_config(config["device_config"], "device")
+		if self.is_simulated():
+			# The config the simulated Cluster compiles with, calibrated
+			# against its chip when matched.
+			device_cfg = self.simulated_cluster().device_cfg
+		else:
+			device_cfg = read_json_config(config["device_config"], "device")
 		elements = device_cfg.get("elements", {})
 		return {
 			"backend": "qblox",
