@@ -293,6 +293,16 @@ def build_schedule(circuit, shots):
 	rx and ry are two non-parallel axes, so Qiskit can synthesise any
 	single-qubit gate from them alone (Euler's rotation theorem), which
 	makes this valid for arbitrary circuits, not just GHZ.
+
+	Returns the schedule and {qubit: classical bit} for its measurements.
+
+	Each operation waits only for the last one on each of its own qubits
+	(as soon as possible). Without a reference, qblox-scheduler starts an
+	operation after the previously added one, which would run the circuit
+	one operation at a time while the other qubits sit idle and decay. A
+	barrier makes the next operation on any of its qubits wait for all of
+	them, and the measurements start together once every measured qubit is
+	free.
 	"""
 	from qiskit.compiler import transpile as qiskit_transpile
 	from qblox_scheduler import Schedule
@@ -303,50 +313,92 @@ def build_schedule(circuit, shots):
 	qubit_names = [f"q{i}" for i in range(adapted.num_qubits)]
 
 	schedule = Schedule(f"circuit_{id(circuit)}", repetitions=shots)
-	schedule.add(Reset(*qubit_names))
+	reset = schedule.add(Reset(*qubit_names))
+	# What each qubit's next operation has to wait for.
+	last = {q: [reset] for q in range(adapted.num_qubits)}
+	measured = {}
+
+	def waits_for(qubits):
+		refs = []
+		for q in qubits:
+			for ref in last[q]:
+				if not any(ref is seen for seen in refs):
+					refs.append(ref)
+		return refs
+
+	def add(operation, qubits):
+		refs = waits_for(qubits)
+		schedulable = schedule.add(operation, ref_op=refs[0], ref_pt="end")
+		for ref in refs[1:]:
+			schedulable.add_timing_constraint(ref_schedulable=ref, ref_pt="end")
+		for q in qubits:
+			last[q] = [schedulable]
+		return schedulable
 
 	for instruction in adapted.data:
 		gate_name = instruction.operation.name
-		qubits = [adapted.qubits.index(q) for q in instruction.qubits]
+		qubits = [adapted.find_bit(q).index for q in instruction.qubits]
 		params = instruction.operation.params
 
+		if gate_name == "barrier":
+			refs = waits_for(qubits)
+			for q in qubits:
+				last[q] = list(refs)
+			continue
+		if gate_name == "measure":
+			if qubits[0] in measured:
+				raise DEFwExecutionError(
+					f"qubit {qubits[0]} is measured twice; only one final "
+					"measurement per qubit is supported")
+			measured[qubits[0]] = adapted.find_bit(instruction.clbits[0]).index
+			continue
+		if any(q in measured for q in qubits):
+			raise DEFwExecutionError(
+				f"{gate_name!r} acts on a qubit after its measurement; "
+				"mid-circuit measurement is not supported")
+
 		if gate_name == "rx":
-			schedule.add(Rxy(
-				theta=rad_to_deg(params[0]), phi=0.0,
-				qubit=qubit_names[qubits[0]]))
+			add(Rxy(theta=rad_to_deg(params[0]), phi=0.0,
+				qubit=qubit_names[qubits[0]]), qubits)
 		elif gate_name == "ry":
-			schedule.add(Rxy(
-				theta=rad_to_deg(params[0]), phi=90.0,
-				qubit=qubit_names[qubits[0]]))
+			add(Rxy(theta=rad_to_deg(params[0]), phi=90.0,
+				qubit=qubit_names[qubits[0]]), qubits)
 		elif gate_name == "cz":
-			schedule.add(CZ(qubit_names[qubits[0]], qubit_names[qubits[1]]))
-		elif gate_name == "measure":
-			# bin_mode="append" gives one value per repetition; the
-			# default averages them into a single bin.
-			# ThresholdedAcquisition makes the FPGA apply dev_cfg's
-			# acq_rotation/acq_threshold and return a 0/1 bit - without it
-			# this returns raw SSB integration amplitude instead.
-			schedule.add(Measure(
-				qubit_names[qubits[0]], acq_channel=qubits[0], acq_index=0,
-				bin_mode="append", acq_protocol="ThresholdedAcquisition"))
-		elif gate_name == "barrier":
-			pass
+			add(CZ(qubit_names[qubits[0]], qubit_names[qubits[1]]), qubits)
 		else:
 			raise DEFwExecutionError(
 				f"unsupported gate {gate_name!r} after basis rewrite")
 
-	return schedule
+	if not measured:
+		raise DEFwExecutionError("the circuit measures no qubits")
+
+	# bin_mode="append" gives one value per repetition; the default averages
+	# them into a single bin. ThresholdedAcquisition makes the FPGA apply
+	# dev_cfg's acq_rotation/acq_threshold and return a 0/1 bit - without it
+	# this returns raw SSB integration amplitude instead. Each qubit's
+	# acq_channel is its index, which is how its values are found again.
+	first = None
+	for qubit in sorted(measured):
+		measure = Measure(
+			qubit_names[qubit], acq_channel=qubit, acq_index=0,
+			bin_mode="append", acq_protocol="ThresholdedAcquisition")
+		if first is None:
+			first = add(measure, sorted(measured))
+		else:
+			schedule.add(measure, ref_op=first, ref_pt="start")
+
+	return schedule, measured
 
 
-def extract_channel_values(dataset, num_qubits):
+def extract_channel_values(dataset, qubits):
 	"""
-	Pull one array per acq_channel (qubit) out of the dataset returned by
-	HardwareAgent.run(). Tries int then str keys; fails loudly with the
-	dataset's real variable names otherwise, rather than reading the wrong
-	channel silently.
+	Pull one array per acq_channel (measured qubit) out of the dataset
+	returned by HardwareAgent.run(). Tries int then str keys; fails loudly
+	with the dataset's real variable names otherwise, rather than reading the
+	wrong channel silently.
 	"""
 	channel_values = {}
-	for qubit_idx in range(num_qubits):
+	for qubit_idx in qubits:
 		if qubit_idx in dataset.data_vars:
 			var = dataset[qubit_idx]
 		elif str(qubit_idx) in dataset.data_vars:
@@ -355,18 +407,27 @@ def extract_channel_values(dataset, num_qubits):
 			raise DEFwExecutionError(
 				f"acq_channel {qubit_idx} not found in dataset. Available "
 				f"data variables: {list(dataset.data_vars)}")
-		channel_values[qubit_idx] = np.asarray(var.values).squeeze()
+		channel_values[qubit_idx] = np.atleast_1d(
+			np.asarray(var.values).squeeze())
 	return channel_values
 
 
-def build_counts(channel_values, shots):
-	# Thresholded acquisition returns -1 for |0> and +1 for |1>, not 0/1.
-	num_qubits = len(channel_values)
+def build_counts(channel_values, measured, num_clbits, shots):
+	"""
+	Counts keyed the way Qiskit keys them: one character per classical bit,
+	highest bit leftmost, so classical bit 0 is the last character. QFw's
+	Qiskit client passes the keys through unchanged. A classical bit that
+	no measurement writes stays 0.
+
+	Thresholded acquisition returns -1 for |0> and +1 for |1>, not 0/1.
+	"""
 	counts = {}
 	for shot in range(shots):
-		bitstring = "".join(
-			"1" if float(channel_values[q][shot]) > 0 else "0"
-			for q in range(num_qubits))
+		bits = ["0"] * num_clbits
+		for qubit, clbit in measured.items():
+			if float(channel_values[qubit][shot]) > 0:
+				bits[num_clbits - 1 - clbit] = "1"
+		bitstring = "".join(bits)
 		counts[bitstring] = counts.get(bitstring, 0) + 1
 	return counts
 
@@ -470,7 +531,7 @@ class QbloxServiceClient:
 		Manually replicates qblox_scheduler.experiments.schedules.
 		ExecuteSchedule.run() - what agent.run() calls internally - timing
 		each step separately: agent.run() only exposes the total. Returns
-		(dataset, stage_timings_ms).
+		(dataset, measured, stage_timings_ms).
 		"""
 		from qblox_scheduler.backends.graph_compilation import SerialCompiler
 
@@ -482,7 +543,7 @@ class QbloxServiceClient:
 			timings_ms[label] = (time.time() - start) * 1000
 			return result
 
-		schedule = timed("schedule", build_schedule, circuit, shots)
+		schedule, measured = timed("schedule", build_schedule, circuit, shots)
 
 		agent.connect_clusters()
 
@@ -503,7 +564,7 @@ class QbloxServiceClient:
 		dataset = timed("retrieve_acquisition", inst_coord.retrieve_acquisition)
 
 		timings_ms["total"] = sum(timings_ms.values())
-		return dataset, timings_ms
+		return dataset, measured, timings_ms
 
 	def _log_compiled_schedule(self, agent):
 		"""
@@ -541,18 +602,19 @@ class QbloxServiceClient:
 			exec_started = time.monotonic()
 			stage_timings_ms = None
 			if self._profile_stages:
-				dataset, stage_timings_ms = self._run_staged(
+				dataset, measured, stage_timings_ms = self._run_staged(
 					agent, circuit, shots)
 			else:
-				schedule = build_schedule(circuit, shots)
+				schedule, measured = build_schedule(circuit, shots)
 				dataset = agent.run(schedule)
 			self._log_compiled_schedule(agent)
 			exec_seconds = time.monotonic() - exec_started
 
 		# Raw per-shot values distinguish "acquisition varies but always
 		# thresholds the same way" from "acquisition is not varying".
-		channel_values = extract_channel_values(dataset, circuit.num_qubits)
-		counts = build_counts(channel_values, shots)
+		channel_values = extract_channel_values(dataset, sorted(measured))
+		counts = build_counts(
+			channel_values, measured, circuit.num_clbits, shots)
 		total_seconds = time.monotonic() - start
 
 		timing = {

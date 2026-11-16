@@ -88,13 +88,37 @@ corrupt each other's acquisition. Enforced in three places:
 
 `async_run` means "the caller does not block", not "two circuits run at once".
 
+## Circuits, schedule and results
+
+`build_schedule` re-transpiles each circuit to `rx`, `ry` and `cz` and turns
+it into a qblox-scheduler `Schedule`:
+
+- **As soon as possible, per qubit.** Each operation waits only for the
+  last operation on each of its own qubits, so gates on different qubits run
+  in parallel. (qblox-scheduler's default, without a reference operation, is
+  to start after the previously added operation, which runs a circuit one
+  operation at a time.) A `barrier` makes the next operation on any of its
+  qubits wait for all of them.
+- **Readout together at the end.** All measurements start at once, after the
+  last operation on every measured qubit. One final measurement per qubit;
+  mid-circuit measurement is rejected.
+- **Counts in Qiskit's order.** Keys have one character per classical bit,
+  with classical bit 0 on the right, and each qubit's result goes to the
+  classical bit the circuit measured it into. QFw's Qiskit client passes the
+  keys through unchanged.
+
+`tests/test_qblox_qpm.py` checks these, compiles against `configs/`, and runs
+a circuit end to end on the dummy cluster (needs qiskit and qblox-scheduler
+1.0.0b4, whose `BasicTransmonElement` the shipped `dev_cfg.json` uses).
+
 ## Known gaps
 
 - **Device-profile timings are placeholders.** `QBLOX_PROFILE_STAGES=1`
   records real per-stage timings through `get_task_timing()`; sweep qubit
   count and depth and derive the coefficients from that.
-- **The shipped `dev_cfg.json` declares 2 qubits**, with `acq_rotation` and
-  `acq_threshold` both 0 (uncalibrated). Circuits wider than 2 qubits are
+- **The shipped `dev_cfg.json` declares 3 qubits** (q0-q2, CZ edges q0_q1
+  and q0_q2, though its `name` is `device_2q`), with `acq_rotation` and
+  `acq_threshold` both 0 (uncalibrated). Circuits wider than 3 qubits are
   rejected by admission, which is correct.
 - **No cancellation.** Qblox has no mid-schedule abort, so `cancel()` can
   only stop a queued task from starting.
