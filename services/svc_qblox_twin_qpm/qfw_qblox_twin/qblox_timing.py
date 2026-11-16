@@ -24,16 +24,17 @@ into a DeviceCal, after which the twin's own ASAP schedule matches Qblox's.
 
 ``device_compilation_config`` and ``dummy_cluster_hardware_config`` build a
 device config and a Cluster config from a DeviceCal, for trying this without
-a lab configuration. Transmon ``QuantumDevice`` files need the element
-classes in ``qblox_applications``; a ``DeviceCompilationConfig`` needs only
+a lab configuration. Transmon ``QuantumDevice`` files load with
+qblox-scheduler 1.0.0b4 (QFw's pin); from 1.0.0 on their element classes live
+in ``qblox_applications``. A ``DeviceCompilationConfig`` needs only
 qblox-scheduler.
 
 Not done: running the compiled Q1ASM in Q1Simulator to catch real-time
 buffer underruns. q1simulator 1.4 imports a Qt GUI when loaded, so it needs
 Qt bindings even headless.
 
-Written against qblox-scheduler 1.0. qblox-scheduler is imported only inside
-these functions: nothing else in the twin needs it.
+Tested with qblox-scheduler 1.0.0b4 and 1.0.1. qblox-scheduler is imported
+only inside these functions: nothing else in the twin needs it.
 """
 from __future__ import annotations
 
@@ -424,16 +425,21 @@ def apply_qblox_durations(device_cal: DeviceCal, durations: Mapping[tuple, float
 def _twin_measurement(port, clock, pulse_amp, pulse_duration, acq_delay,
                       integration_time, acq_label=None, **_ignored):
     """Square readout pulse with an IQ integration acq_delay after its start."""
-    from qblox_scheduler.operations.acquisition_library import IQIntegration
+    from qblox_scheduler.operations import acquisition_library
     from qblox_scheduler.operations.pulse_library import SquarePulse
     from qblox_scheduler.schedules.schedule import TimeableSchedule
 
+    if hasattr(acquisition_library, "IQIntegration"):        # 1.0.0 and later
+        acquisition = acquisition_library.IQIntegration(
+            port=port, clock=clock, duration=integration_time,
+            acq_label=0 if acq_label is None else acq_label)
+    else:                                                    # 1.0.0b4
+        acquisition = acquisition_library.SSBIntegrationComplex(
+            port=port, clock=clock, duration=integration_time)
     schedule = TimeableSchedule("qblox-twin measurement")
     schedule.add(SquarePulse(amplitude=pulse_amp, duration=pulse_duration,
                              port=port, clock=clock))
-    schedule.add(IQIntegration(port=port, clock=clock, duration=integration_time,
-                               acq_label=0 if acq_label is None else acq_label),
-                 ref_pt="start", rel_time=acq_delay)
+    schedule.add(acquisition, ref_pt="start", rel_time=acq_delay)
     return schedule
 
 

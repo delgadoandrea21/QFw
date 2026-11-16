@@ -91,11 +91,20 @@ the QFw service APIs, service modules, examples, QHW submodules, and
 runtime configuration templates; it does not build TNQVM, NWQ-Sim, QRMI,
 or QDMI-on-IQM from source.
 
-### This fork: the Qblox digital twin
+### This fork: Qblox services
 
-This fork (`delgadoandrea21/QFw`, branch `qblox-twin-qpm`) adds a QPM service
-that runs a noisy digital twin of a Qblox-controlled transmon chip,
-`services/svc_qblox_twin_qpm`. Clone the fork rather than openQSE/QFw:
+This fork (`delgadoandrea21/QFw`, branch `qblox-twin-qpm`) adds two QPM
+services for Qblox:
+
+- `services/svc_qblox_twin_qpm`, a noisy digital twin of a Qblox-controlled
+  transmon chip, with gate timing optionally taken from Qblox
+  ([README](services/svc_qblox_twin_qpm/README.md)).
+- `services/svc_qblox_qpm`, from Smriti's `dell_qblox` branch
+  (BajajSmriti/QFw), which runs circuits on a Qblox Cluster, or on
+  qblox-scheduler's dummy cluster when no address is set
+  ([README](services/svc_qblox_qpm/README.md)).
+
+Clone the fork rather than openQSE/QFw:
 
 ```bash
 git clone --recursive -b qblox-twin-qpm https://github.com/delgadoandrea21/QFw.git
@@ -105,17 +114,13 @@ Its `.gitmodules` takes DEFw from the fork's own `delgadoandrea21/DEFw` and the
 QHW packages from openQSE; restore the relative QHW URLs before proposing the
 branch upstream.
 
-The twin runs in the standard environment above. qblox-scheduler, which the
-twin needs only to take gate timing from a Qblox configuration, cannot join
-that environment: the IQM packages in `setup/requirements.txt` pin
-`ruamel.yaml==0.17.32`, and qblox-scheduler 1.x needs `ruamel.yaml>=0.18`.
-Either bake the Qblox gate durations into the twin's calibration file with
-`services/svc_qblox_twin_qpm/bake_qblox_durations.py` (no Qblox packages on QFw
-hosts), or build a separate environment for the twin's QPM host from
-`setup/qblox-twin-requirements.txt`, the standard set without `iqm-*` plus
-qblox-scheduler; such a host cannot run the IQM QPMs. The
-[twin's README](services/svc_qblox_twin_qpm/README.md) has the steps for a
-first run on a live QFw.
+Both run in the standard environment above. `setup/requirements.txt` now
+installs `qblox-scheduler==1.0.0b4` and `qblox-instruments`, and bumps
+`iqm-exa-common` to 27.5.4, whose looser `ruamel.yaml` pin lets the IQM stack
+and qblox-scheduler share one environment. The 1.0.0b4 beta is pinned because
+it still ships the transmon element classes, which later releases moved to
+`qblox_applications`. Importing it loads Qt, so hosts need the system OpenGL
+library (`mesa-libGL`).
 
 ## Run QFw Locally
 

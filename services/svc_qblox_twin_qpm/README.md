@@ -5,6 +5,11 @@ chip: OpenQASM 2.0 in, noisy counts out. It is laid out like
 `svc_nwqsim_qpm` (`__init__.py`, `svc_qpm.py`, `svc_qrc.py`) and wraps
 `QbloxTwinQPM` from the vendored `qfw_qblox_twin` package.
 
+Its sibling `svc_qblox_qpm` (from Smriti's `dell_qblox` branch,
+BajajSmriti/QFw) runs circuits on a Qblox Cluster, real or qblox-scheduler's
+dummy one. The twin is for when there is no hardware: it simulates the chip
+and takes only its gate timing from Qblox.
+
 ```
 svc_qblox_twin_qpm/
   __init__.py          svc_info, service_classes, initialize/uninitialize
@@ -78,10 +83,12 @@ twin = TwinBackend(cal, timing=lambda c: qt.durations_from_qblox_scheduler(c, co
 A device-layer compile of a small circuit takes milliseconds; with a
 hardware config it is about half a second, so `circuit` mode is for
 studying schedules rather than throughput. Transmon `QuantumDevice` files
-need the element classes from `qblox_applications`;
-`qt.device_compilation_config(cal)` and `qt.dummy_cluster_hardware_config(cal)`
-build configs from a twin calibration when you have neither. Requires
-qblox-scheduler (tested with 1.0.1), which the rest of the twin never imports.
+(`BasicTransmonElement`) load with qblox-scheduler 1.0.0b4, QFw's pin, for
+example `services/svc_qblox_qpm/configs/dev_cfg.json`; from 1.0.0 on that
+class lives in `qblox_applications`. `qt.device_compilation_config(cal)` and
+`qt.dummy_cluster_hardware_config(cal)` build configs from a twin calibration
+when you have no Qblox config. Tested with qblox-scheduler 1.0.0b4 and 1.0.1;
+the rest of the twin never imports it.
 
 ## Running on a live QFw
 
@@ -103,8 +110,8 @@ daemons. These are the steps for a first run.
    checking out the branch.
 
 2. **Install and activate**, with QFw's standard Python environment
-   (Python 3.11 or later). The twin needs nothing beyond it: numpy is already a
-   QFw requirement.
+   (Python 3.11 or later). It has everything the twin uses, including
+   qblox-scheduler for Qblox timing.
 
    ```bash
    ./setup/qfw_install.sh --prefix <prefix> --with-defw
@@ -127,7 +134,7 @@ daemons. These are the steps for a first run.
    000 and 111.
 
 4. **Long-running site QPM** (once step 3 works). `qblox-twin` is in the
-   packaged site manifest (ports 8790 and 8791). Start it on its host after
+   packaged site manifest (ports 8890 and 8891). Start it on its host after
    the directory service reports ready:
 
    ```bash
@@ -156,18 +163,29 @@ itself. Compiling first is what applies the calibration-aware layout.
 
 ## Qblox packages
 
-The twin needs no Qblox packages with its default timing. qblox-scheduler is
-only needed to take gate timing from your Qblox configuration, and it **cannot
-be installed into QFw's standard environment**: QFw's IQM client stack pins
-`ruamel.yaml==0.17.32` (through `iqm-exa-common`), and qblox-scheduler 1.x
-needs `ruamel.yaml>=0.18`. A resolver given both either fails or quietly picks
-the empty `qblox-scheduler==0.0.0` release. There are three ways around it.
+QFw's `setup/requirements.txt` installs `qblox-scheduler==1.0.0b4` and
+`qblox-instruments` for `svc_qblox_qpm`, and bumps `iqm-exa-common` to 27.5.4
+so the IQM stack and qblox-scheduler share one environment (27.5.1 pinned
+`ruamel.yaml==0.17.32`; qblox-scheduler needs 0.18 or later). The twin uses
+qblox-scheduler only for Qblox timing.
 
-1. **Bake the durations into the calibration file (recommended).** Run
-   `bake_qblox_durations.py` (in this directory) once, wherever qblox-scheduler
-   is installed (your lab's Qblox environment works), and deploy the file it
-   writes. The QPM then uses Qblox's gate durations from the standard QFw
-   environment, with no Qblox packages:
+- **1.0.0b4 is a beta.** It is pinned because it still ships
+  `BasicTransmonElement`, which from 1.0.0 on lives in `qblox_applications`
+  (not on public PyPI). The twin's timing works on both.
+- **Importing it loads Qt** (through quantify-core), so a minimal host needs
+  the system OpenGL library (`mesa-libGL`). The twin imports qblox-scheduler
+  only when Qblox timing is configured.
+
+Two ways to use Qblox timing:
+
+1. **Live, in the QPM.** Set `QFW_QBLOX_TWIN_QBLOX_DEVICE` (and optionally
+   `QFW_QBLOX_TWIN_QBLOX_HARDWARE`, and `QFW_QBLOX_TWIN_TIMING=circuit` to
+   compile every circuit). Nothing beyond QFw's environment is needed.
+
+2. **Baked into the calibration file.** Run `bake_qblox_durations.py` (in
+   this directory) once and deploy the file it writes. The QPM then reads
+   Qblox's gate durations without importing qblox-scheduler, which suits a
+   host without OpenGL or a Qblox config kept somewhere else:
 
    ```bash
    python bake_qblox_durations.py --device quantum_device.yaml \
@@ -183,41 +201,13 @@ the empty `qblox-scheduler==0.0.0` release. There are three ways around it.
    `--dry-run` prints the table without writing. The script needs only this
    directory, numpy and qblox-scheduler, not a QFw install.
 
-2. **Live Qblox timing in the QPM** (`QFW_QBLOX_TWIN_QBLOX_DEVICE`, and
-   `QFW_QBLOX_TWIN_TIMING=circuit` to compile every circuit). The twin's QPM
-   host then needs its own environment, built from
-   `setup/qblox-twin-requirements.txt`: the standard requirements without the
-   `iqm-*` packages, plus `qblox-scheduler==1.0.1`. That host cannot also run
-   the IQM QPMs.
-
-   ```bash
-   uv venv --python 3.12 /path/to/qfw-qblox-venv
-   source /path/to/qfw-qblox-venv/bin/activate
-   uv pip install -r setup/build-requirements.txt \
-     -r setup/qblox-twin-requirements.txt --override setup/overrides.txt
-   source <prefix>/bin/qfw-activate --venv /path/to/qfw-qblox-venv
-   ```
-
-3. **Transmon `QuantumDevice` files** (YAML or JSON with
-   `BasicTransmonElement`) also need `qblox_applications`, which is not on
-   public PyPI and comes from Qblox. Option 1 avoids installing it on QFw
-   hosts: run the script where it is already installed.
-   `DeviceCompilationConfig` files need only qblox-scheduler, unless their
-   operation factories live in `qblox_applications`.
-
-`tests/test_qblox_twin_requirements.py` keeps `qblox-twin-requirements.txt`
-in step with `requirements.txt`, and CI (`ci-resolve`) resolves it next to the
-standard set.
-
 ## Tests
 
 - `tests/test_qblox_twin.py`: the twin's engine and `QbloxTwinQPM` (needs
   numpy; the QuTiP cross-check runs when QuTiP is installed).
 - `tests/test_qblox_timing.py`: Qblox timing, including a hardware compile on
   a dummy Cluster, and `bake_qblox_durations.py` (skips without
-  qblox-scheduler).
-- `tests/test_qblox_twin_requirements.py`: `setup/qblox-twin-requirements.txt`
-  follows `setup/requirements.txt` without `iqm-*`, plus qblox-scheduler.
+  qblox-scheduler; passes with 1.0.0b4 and 1.0.1).
 - `tests/mock/test_qblox_twin_qpm.py`: the service, with a stand-in twin,
   since the mock suite stubs numpy: query and directory resolution,
   calibration records, sync and async runs through a reserved QPM, failures,
@@ -243,10 +233,11 @@ standard set.
 | QuTiP engine (`QFW_QBLOX_TWIN_ENGINE=qutip`) | implemented; matches numpy (Hellinger > 0.9999 on GHZ-3, QuTiP 5.3) |
 | QFw service: registration, sync/async, cancel, telemetry | implemented, tested in the mock suite and end to end (Qiskit target → transpile → QPM → twin) with DEFw stubbed |
 | Full-stack run (`qfw_ghz.sh … qblox-twin`) | not yet run against a live DEFw/PRTE deployment |
-| `qblox_timing.py`: schedule, compile, per-op and per-element timing | implemented, tested with qblox-scheduler 1.0.1 (device layer and a dummy Cluster) |
+| `qblox_timing.py`: schedule, compile, per-op and per-element timing | implemented, tested with qblox-scheduler 1.0.0b4 and 1.0.1 (device layer and a dummy Cluster) |
+| Transmon `QuantumDevice` files | load and compile (device and hardware) with 1.0.0b4, checked with `svc_qblox_qpm/configs/dev_cfg.json` |
 | Q1Simulator check of the compiled Q1ASM | not done: q1simulator 1.4 needs Qt bindings even headless |
-| `bake_qblox_durations.py` (Qblox durations baked into the calibration) | implemented, tested with qblox-scheduler 1.0.1, including a hardware compile |
-| Twin host environment (`setup/qblox-twin-requirements.txt`) | resolves on Python 3.11, 3.12 and 3.13 (uv, and CI's `ci-resolve`); not yet installed end to end |
+| `bake_qblox_durations.py` (Qblox durations baked into the calibration) | implemented, tested with qblox-scheduler 1.0.0b4 and 1.0.1, including a hardware compile |
+| One environment for IQM and Qblox (`setup/requirements.txt`) | resolves on Python 3.11, 3.12 and 3.13 (uv, and CI's `ci-resolve`); not yet installed end to end |
 | Fork submodules | DEFw from `delgadoandrea21/DEFw` (pinned commit present); QHW packages from openQSE (pinned commits fetchable) |
 
 ## Remaining work

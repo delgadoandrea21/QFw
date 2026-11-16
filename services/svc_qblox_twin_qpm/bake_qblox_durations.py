@@ -62,9 +62,9 @@ def _qblox_scheduler_version():
 		import qblox_scheduler
 	except ImportError:
 		raise SystemExit(
-			"bake_qblox_durations.py needs qblox-scheduler (tested with 1.0.1). "
-			"Run it in an environment that has it: your lab's Qblox "
-			"environment, or one built from setup/qblox-twin-requirements.txt.") from None
+			"bake_qblox_durations.py needs qblox-scheduler (tested with "
+			"1.0.0b4 and 1.0.1). QFw's setup/requirements.txt installs it; "
+			"otherwise run this in your lab's Qblox environment.") from None
 	return getattr(qblox_scheduler, "__version__", "unknown")
 
 

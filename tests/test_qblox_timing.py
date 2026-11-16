@@ -1,6 +1,7 @@
 """The twin's Qblox timing (services/svc_qblox_twin_qpm/qfw_qblox_twin/qblox_timing.py).
 
-Needs numpy and qblox-scheduler (tested with 1.0.1); skips without them.
+Needs numpy and qblox-scheduler (tested with 1.0.0b4 and 1.0.1); skips
+without them.
 The device configs come from the twin's own calibration, so no
 qblox_applications element classes are needed.
 """

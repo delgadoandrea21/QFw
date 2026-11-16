@@ -478,7 +478,7 @@ def test_query_metadata_resolves_through_the_defw_directory():
 		"peer_handle": "qblox-twin-peer",
 		"endpoint": {
 			"address": "qblox-twin.example",
-			"listen_port": 8790,
+			"listen_port": 8890,
 			"pid": 123,
 			"node_name": "qblox-twin",
 			"hostname": "qblox-twin-head",
