@@ -1,6 +1,7 @@
 from api_events import Event
 from defw_util import print_thread_stack_trace_to_logger
 import logging
+import math
 import time
 import queue
 import signal
@@ -23,12 +24,34 @@ sys.path.append(os.path.split(os.path.abspath(__file__))[0])
 # site file to change it; 0 turns the limit off.
 SITE_CONFIG_ENV = "QFW_SITE_CONFIG"
 CIRCUIT_TIME_LIMIT_KEY = "circuit-time-limit-seconds"
+SERVICE_CONFIG_ENV = "QFW_SERVICE_CONFIG"
 DEFAULT_CIRCUIT_TIME_LIMIT_SEC = 600
 
 
-def circuit_time_limit(path=None):
+SITE_CIRCUIT_TIME_LIMIT = f"qpm.{CIRCUIT_TIME_LIMIT_KEY}"
+
+# Killing the launcher does not reach a runner that a DVM started (mpirun
+# --dvm). That runner is a child of the DVM's prte, so it would keep running
+# until teardown. Each launch therefore also gives mpirun the limit through
+# MPIEXEC_TIMEOUT, and the DVM ends the job's processes itself, on every
+# host. The DVM's limit is a few seconds longer than the QPM's, so the QPM
+# still fails the circuit first, with a message that names the limit.
+MPIEXEC_TIMEOUT_ENV = "MPIEXEC_TIMEOUT"
+DVM_TIME_LIMIT_GRACE_SEC = 5
+
+
+def circuit_time_limit(path=None, service=None):
 	"""The runner time limit in seconds from the site file, or None for
 	no limit."""
+	return circuit_time_limit_and_source(path, service)[0]
+
+
+def circuit_time_limit_and_source(path=None, service=None):
+	if service is None:
+		service = _this_service_entry()
+	if CIRCUIT_TIME_LIMIT_KEY in service:
+		source = f"services[{service.get('name')}].{CIRCUIT_TIME_LIMIT_KEY}"
+		return _time_limit(service[CIRCUIT_TIME_LIMIT_KEY], source), source
 	if path is None:
 		path = os.environ.get(SITE_CONFIG_ENV, "").strip()
 	value = None
@@ -45,8 +68,18 @@ def circuit_time_limit(path=None):
 		if isinstance(qpm, dict):
 			value = qpm.get(CIRCUIT_TIME_LIMIT_KEY)
 	if value is None:
-		return DEFAULT_CIRCUIT_TIME_LIMIT_SEC
-	source = f"qpm.{CIRCUIT_TIME_LIMIT_KEY}"
+		return DEFAULT_CIRCUIT_TIME_LIMIT_SEC, SITE_CIRCUIT_TIME_LIMIT
+	return _time_limit(value, SITE_CIRCUIT_TIME_LIMIT), SITE_CIRCUIT_TIME_LIMIT
+
+
+def _this_service_entry():
+	if not os.environ.get(SERVICE_CONFIG_ENV, "").strip():
+		return {}
+	from util.mpi import this_service_entry
+	return this_service_entry()
+
+
+def _time_limit(value, source):
 	if isinstance(value, bool):
 		raise ValueError(f"invalid {source}: {value!r}")
 	try:
@@ -77,7 +110,8 @@ class UTIL_QRC:
 		self.worker_pool_rr = 0
 		self.num_workers = num_workers
 		self.num_worker_tasks = num_worker_tasks
-		self.circuit_time_limit = circuit_time_limit()
+		self.circuit_time_limit, self.circuit_time_limit_source = (
+			circuit_time_limit_and_source())
 		logging.debug(f'start = {start}')
 		if start:
 			self.launcher = svc_launcher.Launcher()
@@ -155,14 +189,30 @@ class UTIL_QRC:
 		task_info['time_limit_hit'] = limit
 		logging.critical(
 			f"circuit {task_info['circ'].get_cid()} has run for more "
-			f"than {limit:g} s (qpm.{CIRCUIT_TIME_LIMIT_KEY}); killing "
+			f"than {limit:g} s ({self.circuit_time_limit_source}); killing "
 			f"its launcher, pid {pid}")
 		try:
-			# The launcher starts each runner in a session of its own,
-			# so this reaches whatever it started on this host.
+			# The launcher runs in a session of its own, so this reaches
+			# what it started itself on this host. A runner that a DVM
+			# started is the DVM's child, and the DVM ends it
+			# (MPIEXEC_TIMEOUT_ENV).
 			os.killpg(pid, signal.SIGKILL)
 		except ProcessLookupError:
 			pass
+
+	def _launch_env(self):
+		"""What a runner's launcher adds to its environment: the DVM's
+		own time limit, a little longer than the QPM's.
+
+		mpirun reads MPIEXEC_TIMEOUT as its --timeout, which a DVM
+		enforces even after the launcher is gone. Without a QPM limit the
+		launcher's environment is left as it is.
+		"""
+		limit = self.circuit_time_limit
+		if not limit:
+			return None
+		seconds = math.ceil(limit) + DVM_TIME_LIMIT_GRACE_SEC
+		return {MPIEXEC_TIMEOUT_ENV: str(seconds)}
 
 	def _finish_task(self, task_info, stdout, stderr, rc):
 		circ = task_info['circ']
@@ -189,7 +239,7 @@ class UTIL_QRC:
 					message = (
 						f"circuit runner killed after {limit:g} s, the "
 						f"QPM's circuit time limit "
-						f"(qpm.{CIRCUIT_TIME_LIMIT_KEY})")
+						f"({self.circuit_time_limit_source})")
 					res = message + '\n' + res
 					error = DEFwExecutionError(message)
 				else:
@@ -369,8 +419,9 @@ class UTIL_QRC:
 		circ.set_launching()
 		try:
 			task_info = {}
-			logging.debug(f"Running -- {cmd}")
-			pid = self.launcher.launch(cmd)
+			env = self._launch_env()
+			logging.debug(f"Running -- {cmd} -- adding {env}")
+			pid = self.launcher.launch(cmd, env=env)
 			logging.debug(f"Running -- {cmd} -- with pid {pid}")
 			circ.set_running()
 		except Exception as e:

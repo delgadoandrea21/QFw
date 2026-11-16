@@ -54,10 +54,30 @@ QPM_PROVIDER_SELECTIONS = {
 		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
 		"qpm_capabilities": QPMCapability.QPM_CAP_TENSORNETWORK,
 	},
+	# Qiskit Aer, noiseless or emulating a named device under its noise.
+	"aer": {
+		"provider": "aer",
+		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
+		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
+	},
 	"qb": {
 		"provider": "qb",
 		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
 		"qpm_capabilities": QPMCapability.QPM_CAP_STATEVECTOR,
+	},
+	# One service module serves both, advertising HARDWARE when a cluster
+	# address resolves and SIMULATOR when none does, so the two keys select
+	# between them the same way "iqm" and "fake-iqm" do. No statevector
+	# capability: Qblox returns thresholded shots.
+	"qblox-cluster": {
+		"provider": "qblox",
+		"qpm_type": QPMType.QPM_TYPE_HARDWARE,
+		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
+	},
+	"qblox-dummy": {
+		"provider": "qblox",
+		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
+		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
 	},
 }
 

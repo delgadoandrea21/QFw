@@ -4,6 +4,7 @@ import sys
 import types
 import logging
 import ast
+import json
 import os
 import threading
 
@@ -103,6 +104,10 @@ def _install_yaml_stub():
 		text = str(data or "")
 		if not text.strip():
 			return {}
+		try:
+			return json.loads(text)
+		except ValueError:
+			pass
 		try:
 			return ast.literal_eval(text)
 		except (SyntaxError, ValueError):
@@ -620,8 +625,8 @@ def _install_qiskit_stubs():
 	circuit_mod.QuantumCircuit = QuantumCircuit
 	circuit_mod.ClassicalRegister = ClassicalRegister
 	circuit_mod.QuantumRegister = QuantumRegister
-	circuit_mod.Measure = type("Measure", (), {"name": "measure", "num_qubits": 1})
-	circuit_mod.Reset = type("Reset", (), {"name": "reset", "num_qubits": 1})
+	circuit_mod.Measure = type("Measure", (), {"name": "measure", "num_qubits": 1, "params": []})
+	circuit_mod.Reset = type("Reset", (), {"name": "reset", "num_qubits": 1, "params": []})
 	circuit_mod.Gate = Gate
 	circuit_mod.Parameter = Parameter
 	sys.modules["qiskit.circuit"] = circuit_mod
@@ -634,6 +639,7 @@ def _install_qiskit_stubs():
 
 		def __init__(self, *args, **kwargs):
 			self.args = args
+			self.params = list(args)
 			self.kwargs = kwargs
 
 	_two_qubit_gates = {

@@ -31,6 +31,22 @@ services:
     provider-launch:
       type: internal
 
+  - name: aer
+    credential-mode: no-secret
+    module: svc_aer_qpm
+    load-modules: svc_aer_qpm,api_launcher
+    agent-prefix: qpm_aer
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    listen-port: 8790
+    telnet-port: 8791
+    aer:
+      mode: ideal
+      device: CPU
+      num-qubits: 30
+    provider-launch:
+      type: mpi
+
   - name: qblox-twin
     credential-mode: no-secret
     module: svc_qblox_twin_qpm
@@ -38,8 +54,8 @@ services:
     agent-prefix: qpm_qblox_twin
     assigned-hosts: group1
     assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
-    listen-port: 8790
-    telnet-port: 8791
+    listen-port: 8890
+    telnet-port: 8891
     provider-launch:
       type: internal
 
@@ -53,6 +69,32 @@ services:
     device-id: backline-local
     listen-port: 8690
     telnet-port: 8691
+    provider-launch:
+      type: internal
+
+  # Software cluster. No device-id on purpose - see local-services.yaml.
+  - name: qblox-dummy
+    credential-mode: no-secret
+    module: svc_qblox_qpm
+    load-modules: svc_qblox_qpm,api_launcher
+    agent-prefix: qpm_qblox_dummy
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    listen-port: 9090
+    telnet-port: 9091
+    provider-launch:
+      type: internal
+
+  # The real instrument.
+  - name: qblox-cluster
+    credential-mode: no-secret
+    operation-mode: long-running
+    module: svc_qblox_qpm
+    load-modules: svc_qblox_qpm,api_launcher
+    agent-prefix: qpm_qblox_cluster
+    device-id: qblox-cluster
+    listen-port: 9190
+    telnet-port: 9191
     provider-launch:
       type: internal
 
